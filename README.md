@@ -1,5 +1,5 @@
 # EspHome
-Codigos para EspHome (Domotica)
+Codigos para EspHome (Domótica)
 
 
 Creative Commons License Disclaimer
