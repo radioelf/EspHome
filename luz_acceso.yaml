@@ -1,0 +1,544 @@
+# ------------------------------------------------------------------------------
+# Configuración de ESPHome para el control de luz externa en puerta de entrada
+# ------------------------------------------------------------------------------
+# Sensores utilizados:
+# 
+# - **Sensor de luminosidad GY-30 (IC BH1750, I2C)**
+#   - Dirección I2C: 0x23
+#   - SDA: GPIO33
+#   - SCL: GPIO35
+# 
+# - **Sensor de presencia HLK-LD2410-V1.3**
+#   - TX (GPIO16) conectado al RX del LD2410.
+#   - RX (GPIO17) conectado al TX del LD2410.
+# 
+# - **Sensor de detección de sonido MAX9814 (ADC)**
+#   - VCC: 3.3V o 5V
+#   - GND: GND
+#   - OUT: GPIO4
+#   - GAIN (ajuste de ganancia):
+#     - **Desconectado**: 60 dB (alta sensibilidad).
+#     - **Conectado a GND**: 50 dB (media sensibilidad - usado).
+#     - **Conectado a VCC**: 40 dB (baja sensibilidad).
+#   - AR (respuesta automática de ganancia):
+#     - **Desconectado**: Respuesta lenta (valor por defecto - usado).
+#     - **Conectado a GND**: Respuesta rápida a los cambios de volumen.
+# 
+# - **Relé para control de luz:** GPIO5
+# - **Detección de luces encendidas:** GPIO8
+# - **Detección del estado de la puerta (abierta/cerrada):** GPIO10
+# - **Detección de órdenes desde el interfono:** GPIO13
+# 
+# Descripción:
+# Este ESP32 controla el relé de una luz externa en la puerta de entrada.
+# Utiliza sensores de luminosidad, presencia, sonido y detección de estados 
+# de la puerta, interfono y luces para gestionar su activación y desactivación.
+# ------------------------------------------------------------------------------
+
+substitutions:
+  name: puerta-calle
+  firmware_version: "1.0.4"     
+
+esphome:
+  name: ${name}
+  friendly_name: Puerta Calle
+  comment: "Versión ${firmware_version}"
+  # Bloque on_boot para ejecutar el código al inicio
+  on_boot:
+    - priority: 600
+      then:
+        - lambda: |-
+            uint8_t mac[6];
+            esp_efuse_mac_get_default(mac);
+            char mac_str[18];
+            sprintf(mac_str, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            id(mac_address).publish_state(mac_str);
+
+esp32:
+  board: lolin_s2_mini
+  framework:
+    type: arduino
+
+# -------------------------------------------------------------------
+# Variables Globales
+# -------------------------------------------------------------------
+globals:
+  - id: max_delay_luz
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: sonido_amplitud
+    type: int
+  - id: contador_while
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+# -------------------------------------------------------------------
+# Configuración del Logger (para depuración, configurado en ERROR para minimizar registros)
+# -------------------------------------------------------------------
+logger:
+  level: ERROR
+
+# -------------------------------------------------------------------
+# Habilita la API para la Integración con Home Assistant
+# -------------------------------------------------------------------
+api:
+  encryption:
+    key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# -------------------------------------------------------------------
+# Configuración de Actualización OTA
+# -------------------------------------------------------------------
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# -------------------------------------------------------------------
+# Servidor Web para Acceso desde el Navegador
+# -------------------------------------------------------------------
+web_server:
+  port: 80
+  
+# -------------------------------------------------------------------
+# Configuración de WiFi con IP Estática
+# -------------------------------------------------------------------
+wifi:
+  # El SSID de la red WiFi 
+  ssid: !secret wifi_ssid
+  # La contraseña de la red WiFi 
+  password: !secret wifi_password
+  # Configuración de IP manual (en lugar de obtener una IP automáticamente)
+  manual_ip:
+    # La IP estática que se asignará al dispositivo en la red local
+    static_ip: 192.168.x.x
+    # La dirección IP del router/gateway en la red local
+    gateway: 192.168.x.x
+    # La máscara de subred de la red local
+    subnet: 255.255.255.0
+    # La dirección IP del servidor DNS 
+    dns1: 192.168.x.x
+# -------------------------------------------------------------------
+# Habilita el portal cautivo en caso de problemas de conexión
+# -------------------------------------------------------------------
+#captive_portal:
+
+# -------------------------------------------------------------------
+# Led estado WIFI, parpadeo en la conexión, apagado conectado
+# -------------------------------------------------------------------
+status_led:
+  pin:
+    number: 15
+
+# -------------------------------------------------------------------
+# Habilita el bus I2C para el sensor de Luminosidad BH1750, sda: GPIO33,  scl: GPIO35 -Software-
+# frequency: 10kHz # NO USAR, falla conexión http?
+# -------------------------------------------------------------------
+i2c:
+  sda: GPIO33
+  scl: GPIO35
+  # scan: true  # Escanea dispositivos conectados al bus
+  frequency: 50kHz
+  timeout: 500ms
+
+# -------------------------------------------------------------------
+# Configuración de UART para el Sensor de Presencia LD2410
+# -------------------------------------------------------------------
+uart:
+  id: uart_bus
+  tx_pin: GPIO16
+  rx_pin: GPIO17
+  baud_rate: 256000
+# Configuración del sensor de presencia LD2410 (LD2410-P con BLE)
+ld2410:
+  uart_id: uart_bus
+  throttle: 500ms  # actualiza cada 500 ms
+
+# -------------------------------------------------------------------
+# Sensores de texto con información general
+# -------------------------------------------------------------------
+text_sensor:
+  # Exponer la versión de ESPHome como sensor.
+  - platform: version
+    name: "${name} ESPHome Versión"  # Nombre del sensor de versión de ESPHome
+  # Exponer la información de WiFi como sensores.
+  - platform: wifi_info
+    ip_address:
+      name: "${name} IP"     # Nombre del sensor de dirección IP
+    ssid:
+      name: "${name} SSID"   # Nombre del sensor de SSID (nombre de la red WiFi)
+    bssid:
+      name: "${name} BSSID"  # Nombre del sensor de BSSID (dirección MAC del punto de acceso)
+  # MAC del ESP32
+  - platform: template
+    name: "MAC ESP32"
+    id: mac_address
+    entity_category: "diagnostic"
+# -------------------------------------------------------------------
+# Botónes
+# -------------------------------------------------------------------
+button:
+  # reset Esp32
+  - platform: restart
+    name: "Reiniciar ESP32"
+  # Valores por defecto
+  - platform: template
+    name: "Valores por Defecto"
+    id: val_defecto
+    on_press:
+      then:
+        - lambda: |-
+            // Cambia el valor actual a los valores por defecto (NO se guarda permanentemente)
+            id(sensibilidad_sonido).publish_state(5.0);
+            id(deteccion_sonido).publish_state(95);
+            id(lumens).publish_state(0.5);
+            id(enegia_m).publish_state(45);
+            id(enegia_e).publish_state(80);
+            id(on_luz).publish_state(15);
+            id(det_distancia).publish_state(200);
+        
+# -------------------------------------------------------------------
+# Valores para el ajuste del ruido, luminosidad, detección presencia y periodo luz (relé) a ON
+# -------------------------------------------------------------------
+number:
+  - platform: template  
+    name: "Sensibilidad sonido" 
+    id: sensibilidad_sonido  
+    restore_value: true  # Mantiene el valor entre reinicios
+    optimistic: true
+    update_interval: 5s  # Intervalo de actualización de 5 segundos
+    unit_of_measurement: "%" # Unidad de medida en porcentaje
+    initial_value: "5.0"  # Valor inicial del control deslizante
+    min_value: 1  # Valor mínimo permitido en el control
+    max_value: 20  # Valor máximo permitido en el control
+    step: 0.1  
+    mode: box     # Permite la entrada de texto
+    icon: "mdi:knob"  # Icono representativo de un control giratorio
+  - platform: template  
+    name: "Nivel volument sonido" 
+    id: deteccion_sonido  
+    restore_value: true  # Mantiene el valor entre reinicios
+    optimistic: true
+    update_interval: 1s  # Intervalo de actualización de 1 segundos
+    initial_value: "95"  # Valor inicial del control deslizante
+    min_value: 5  # Valor mínimo permitido en el control
+    max_value: 100  # Valor máximo permitido en el control
+    step: 1  
+    mode: box     # Permite la entrada de texto
+    icon: "mdi:arrow-up-down-bold"  # Icono representativo de ajuste
+  - platform: template
+    name: "Nivel luz Noche"
+    id: lumens
+    restore_value: true  
+    optimistic: true
+    initial_value: 0.5
+    unit_of_measurement: "lx"
+    min_value: 0     
+    max_value: 20  
+    step: 0.1  
+    mode: box     # Permite la entrada de texto    
+    icon: "mdi:brightness-6"  # Icono de brillo (sol)    
+  - platform: template
+    name: "Energía movimiento"
+    id: enegia_m
+    restore_value: true  
+    optimistic: true
+    initial_value: 45
+    min_value: 0      
+    max_value: 100       
+    step: 1      
+    mode: box     # Permite la entrada de texto
+    icon: "mdi:run-fast"  # Icono de movimiento rápido       
+  - platform: template
+    name: "Energía estática"
+    id: enegia_e
+    restore_value: true  
+    optimistic: true
+    initial_value: 80
+    min_value: 0      
+    max_value: 100     
+    step: 1   
+    mode: box     # Permite la entrada de texto
+    icon: "mdi:walk"  # Icono deteción energía estática     
+  - platform: template
+    name: "Distancia detección"
+    id: det_distancia
+    restore_value: true  
+    optimistic: true
+    initial_value: 200
+    unit_of_measurement: "Cm"
+    min_value: 0      
+    max_value: 600    
+    step: 1  
+    mode: box     # Permite la entrada de texto 
+    icon: "mdi:signal-distance-variant"  # Icono de distancia  
+  - platform: template
+    name: "Segundos Luz ON"
+    id: on_luz
+    restore_value: true  
+    optimistic: true
+    initial_value: 15
+    min_value: 0      
+    max_value: 120     
+    step: 1  
+    mode: box     # Permite la entrada de texto 
+    icon: "mdi:timer-sand"  # Icono de reloj de arena
+
+# -------------------------------------------------------------------
+# Sensores conectados al ESP32
+# -------------------------------------------------------------------
+sensor:
+  # Sensor de luminosidad BH1750
+  - platform: bh1750
+    name: "BH1750 Iluminación"
+    id: iluminacion
+    address: 0x23
+    update_interval: 60s 
+    filters:
+      - lambda: |-
+          if (x < 0.1) return 0.1;  // Establece un mínimo de 0.1 lx
+          if (x > 500) return 500;  // Establece un máximo de 500 lx
+          return x;  // Si está en el rango, no modifica el valor
+  # Sensores del LD2410 (movimiento y presencia)
+  - platform: ld2410
+    moving_distance:
+      name: "Distancia en Movimiento"
+      id: distancia_movimiento
+    still_distance:
+      name: "Distancia Estática"
+      id: distancia_estatica
+    moving_energy:
+      name: "Energía en Movimiento"
+      id: energia_movimiento
+      icon: "mdi:run-fast"
+    still_energy:
+      name: "Energía Estática"
+      id: energia_estatica
+      icon: "mdi:walk"
+    detection_distance:
+      name: "Distancia de Detección"
+      id: distancia_teteccion
+  # Sensor de sonido basado en ADC
+  - platform: adc
+    pin: GPIO4
+    name: "Nivel de Sonido"
+    id: nivel_sonido
+    device_class: signal_strength  # Clasificación como medidor de señal
+    icon: "mdi:volume-vibrate" 
+    unit_of_measurement: "dB"
+    update_interval: 2s
+    attenuation: 12db
+    raw: true  # Se indica que los valores no se escalan automáticamente
+    filters:
+      - lambda: |-
+          unsigned int sample;                    // Variable para almacenar la lectura del ADC
+          unsigned long startMillis = millis();   // Guarda el tiempo de inicio de la medición
+          float peakToPeak = 0;                   // Variable para el cálculo del pico a pico de la señal
+          unsigned int signalMax = 0;             // Inicializa el valor máximo de la señal
+          unsigned int signalMin = 4095;          // Inicializa el valor mínimo (ESP32 12 bits)
+          // Bucle para medir la señal durante 500 ms
+          while (millis() - startMillis < 500) {
+            sample = analogRead(4);               // Lee el valor del ADC en el pin 4  
+            if (sample < 4096) {                  // Verifica que la lectura sea válida
+                if (sample > signalMax) {
+                    signalMax = sample;           // Actualiza el valor máximo
+                }
+                else if (sample < signalMin) {
+                    signalMin = sample;           // Actualiza el valor mínimo
+                }
+            }
+          }
+          // Calcula la amplitud pico a pico (12 bits)
+          peakToPeak = map((signalMax - signalMin), 1, 4095, 1.5, 4095);
+          // Almacena el valor de la amplitud en la variable global
+          id(sonido_amplitud) = peakToPeak;
+          // Calcula el estado en dB con una función logarítmica ajustada al ESP32
+          float state = id(sensibilidad_sonido).state * log10(peakToPeak) + 15;
+          return state;  // Devuelve el valor calculado en decibelios
+  # Sensor que muestra el volumen en porcentaje
+  - platform: template       
+    name: "Volumen Sonido"  
+    id: volumen_sonido
+    icon: "mdi:volume-high"  # Icono representativo de volumen alto
+    unit_of_measurement: "%" # Unidad de medida en porcentaje
+    update_interval: 2s      # Intervalo de actualización de 2 segundos
+    lambda: return(map((id(nivel_sonido).state), 15, 150, 0, 100));  // Convierte el nivel de decibeles (15 - 150 dB) en un valor de 0 a 100%
+  # Sensor que muestra la señal de sonido en bruto
+  - platform: template       
+    name: "RAW Sonido"  
+    id: raw_sonido      
+    icon: "mdi:volume-source" # Icono representativo de fuente de volumen
+    unit_of_measurement: "%"  # Unidad de medida en porcentaje
+    update_interval: 2s       # Intervalo de actualización de 2 segundos
+    lambda: return(map(id(sonido_amplitud), 1, 4095, 0, 100));  // Convierte la amplitud de la señal (1 - 4095 en ESP32) a un rango de 0 a 100%
+  # Señal wifi
+  - platform: wifi_signal
+    name: "${name} Señal WIFI dBm"
+    id: wifi_signal_dbm
+    update_interval: 60s
+    entity_category: "diagnostic"
+  - platform: copy # Informa de la intensidad de la señal WiFi en %
+    source_id: wifi_signal_dbm
+    name: "${name} Señal WiFi %"
+    filters:
+      - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
+    unit_of_measurement: "%"
+    icon: "mdi:access-point"
+    entity_category: "diagnostic"
+    device_class: ""
+  - platform: uptime
+    name: "${name} Uptime"
+    type: seconds
+
+# -------------------------------------------------------------------
+# Salida GPIO para control de relé de luz
+# -------------------------------------------------------------------
+output:
+  - platform: gpio
+    pin: GPIO5
+    inverted: false  # Activa con 3v3
+    id: gpio5_output
+
+# -------------------------------------------------------------------   
+# Switch para controlar la luz
+# -------------------------------------------------------------------
+switch:
+  - platform: output
+    output: gpio5_output
+    name: "Relé Luz"
+    id: rele_luz
+    restore_mode: ALWAYS_OFF  # Asegura que la luz esté apagada al reiniciar
+  - platform: ld2410
+    engineering_mode:
+      name: "Modo avanzado"
+    bluetooth:
+      name: "Bluetooth"
+# -------------------------------------------------------------------
+# Sensores binarios  
+# -------------------------------------------------------------------
+binary_sensor:
+  # Detección luz encendida
+  - platform: gpio
+    pin:
+      number: GPIO8       # Pin donde se conecta la señal de detección de la red eléctrica (50Hz)
+      mode: INPUT_PULLUP  # Activa la resistencia pull-up interna para evitar fluctuaciones de señal
+      inverted: true      # Invierte la lógica (0V = activado, 3.3V = desactivado)
+    name: "Luces"         # Nombre del sensor en ESPHome
+    id: luces_entrada     # Identificador único para referencias internas
+    icon: "mdi:light-recessed"  # Icono que se muestra en Home Assistant
+    filters:
+      - delayed_on: 5ms     # Requiere que la señal esté en 0V (GND) por al menos 5ms antes de cambiar a "encendido"
+      - delayed_off: 500ms  # Requiere que la señal esté en 3.3V por al menos 500ms antes de cambiar a "apagado"
+  # Detección puerta abierta-cerrada (reed switch)
+  - platform: gpio
+    pin:
+      number: GPIO10  # Pin al que está conectado el reed 
+      mode: INPUT_PULLUP  
+    name: "Puerta Entrada"
+    id: estado_puerta
+    device_class: door
+    filters:
+      - delayed_on: 100ms
+      - delayed_off: 100ms
+  # Detección orden interfono
+  - platform: gpio
+    pin:
+      number: GPIO13     # Señal del interfono (abrir puerta)
+      mode: INPUT_PULLDOWN  
+    name: "Interfono" 
+    id: orden_interfono
+    icon: "mdi:gesture-double-tap"
+    filters:
+      - delayed_on: 200ms
+      - delayed_off: 200ms
+    on_press:            # Activamos el estado del relé de la luces
+      - switch.turn_on: rele_luz
+      - lambda: 'id(max_delay_luz) = 0;'
+  # Sensor detección sonido o presencia en oscuridad
+  - platform: template
+    name: "Detectado Noche"
+    id: detectado_noche
+    icon: "mdi:human"
+    lambda: |-
+      // Verificar si luces_entrada está apagada y la iluminación ambiente es baja
+      if (!id(luces_entrada).state && id(iluminacion).state < id(lumens).state) {
+        // Activar si hay sonido fuerte
+        if (id(raw_sonido).state > id(deteccion_sonido).state) {
+          return true;
+        }
+        // Activar si hay detección de presencia y la distancia es menor al umbral
+        if (id(deteccion_activa).state && id(distancia_movimiento).state < id(det_distancia).state) {
+          return true;
+        }
+      }
+      return false;
+
+    filters:
+      - delayed_on: 250ms   # Evita activaciones falsas
+      - delayed_off: 1s     # Evita apagados instantáneos
+    on_press:
+      then:
+        - switch.turn_on: rele_luz # Enciende luz (relé on)
+    on_release:
+      then:
+        - script.execute: apagar_luz_timer
+  # Sensor de presencia basado en energía en movimiento o estática
+  - platform: template
+    name: "Presencia"
+    id: deteccion_activa
+    lambda: |-
+      return (id(energia_movimiento).state > id(enegia_m).state || id(energia_estatica).state > id(enegia_e).state);
+    filters:
+      - delayed_on: 100ms   # Evita falsos positivos con un pequeño retardo
+      - delayed_off: 500ms  # Mantiene activo un poco más después de la detección
+    device_class: motion    # Se comporta como un sensor de movimiento
+
+# -------------------------------------------------------------------
+# Script para manejar el apagado de la luz después de 15 segundos (defecto)
+# -------------------------------------------------------------------
+script:
+  - id: apagar_luz_timer
+    mode: restart  # Permite reiniciar el temporizador si el script se ejecuta de nuevo (asíncrono)
+    then:
+      - lambda: 'id(max_delay_luz) = 0;'  # Reiniciar contador
+      - delay: !lambda "return id(on_luz).state * 1000;"  # Usa delay no bloqueante de ESPHome
+      - lambda: 'id(contador_while) = 0;'  # Inicializa el contador antes del bucle
+      - while:
+          condition: 
+            and:
+              - binary_sensor.is_on: detectado_noche
+              - switch.is_on: rele_luz
+              # Detiene el bucle si contador_while >= 60
+              - lambda: 'return id(contador_while) < 60;'  
+          then:
+            - delay: 1s
+            - lambda: 'id(contador_while) += 1;'
+      - if:
+          condition:
+            switch.is_on: rele_luz
+          then:
+            - switch.turn_off: rele_luz
+            - lambda: 'id(max_delay_luz) = 0;'
+
+# -------------------------------------------------------------------
+# Intervalo para verificar el tiempo máximo de activación de 1.5 minutos de la luz (relé)
+# -------------------------------------------------------------------
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            - switch.is_on: rele_luz
+          then:
+            - lambda: |-
+                if (id(max_delay_luz) >= 90) {
+                   id(rele_luz).turn_off(); // Apaga la luz después de 90s
+                   id(max_delay_luz) = 0;
+                } else {
+                  id(max_delay_luz)++;
+                }
+          else:
+            - lambda: |-
+                if (id(max_delay_luz) != 0) {
+                  id(max_delay_luz) = 0;
+                }
