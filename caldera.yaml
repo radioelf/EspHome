@@ -1,0 +1,306 @@
+# Configuración de WT32-ETH01 para ESPHome
+# Descripción:
+# Este archivo de configuración permite integrar el módulo WT32-ETH01 en Home Assistant
+# utilizando ESPHome. Define los GPIOs, la conexión Ethernet, sensores, entradas y salidas
+# para el control de una caldera de calefacción. Se incluyen expansores I2C y un sensor de temperatura.
+#
+# Definiciones de GPIO y su función en WT32-ETH01
+# GPIO  0: Modo de reloj para el bus RMII LAN8720 -> debe ser LOW para entrar en modo BOOT
+# GPIO  1: TXD - HIGH durante el reinicio
+# GPIO  2: LED de estado -> debe estar flotante o LOW durante el arranque - BOOT
+# GPIO  3: RXD - HIGH durante el reinicio
+# GPIO  4: I2C SDA para PCF8574
+# GPIO  5: I2C SCL para PCF8574 - HIGH durante el reinicio -> debe estar HIGH durante el BOOT
+# GPIO  6-11: (SPI chip flash) - HIGH durante el reinicio (NO ACCESIBLE en WT32-ETH01)
+# GPIO 12: - HIGH durante el reinicio -> debe estar en estado ALTO durante el BOOT
+# GPIO 13: Reservado
+# GPIO 14: Entrada 8 - ON: 0, OFF: 1 - HIGH durante el reinicio
+# GPIO 15: Entrada 7 - ON: 0, OFF: 1 - debe ser LOW durante el BOOT
+# GPIO 16: Power_pin del LAN8720
+# GPIO 17: Entrada 2 - ON: 0, OFF: 1
+# GPIO 18: Datos de gestión LAN8720
+# GPIO 19: TXD[0] bus RMII LAN8720
+# GPIO 21: TX_EN bus RMII LAN8720
+# GPIO 22: TXD[1] bus RMII LAN8720
+# GPIO 23: Control de datos de gestión LAN8720
+# GPIO 25: RXD[0] bus RMII LAN8720
+# GPIO 26: RXD[1] bus RMII LAN8720
+# GPIO 27: CRS_DV bus RMII LAN8720
+# GPIO 32: Entrada 4 - ON: 0, OFF: 1
+# GPIO 33: Entrada 3 - ON: 0, OFF: 1
+# GPIO 34: SOLO input - NO soporta Pull-Up
+# GPIO 35: Entrada 1 - ON: 0, OFF: 1 - SOLO input - NO soporta Pull-Up
+# GPIO 36: Entrada 6 - ON: 0, OFF: 1 - SOLO input - NO soporta Pull-Up
+# GPIO 39: Entrada 5 - ON: 0, OFF: 1 - SOLO input - NO soporta Pull-Up
+#-------------------------------------------------------------------------------
+
+substitutions:
+  name_board: 'calefaccion'
+  firmware_version: "1.0.1"
+
+esphome:
+  name: ${name_board}
+  friendly_name: Calefacción WT32-ETH01
+  comment: "Versión ${firmware_version}"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# ------------------------------------------------------------------
+# Logger
+# ------------------------------------------------------------------
+logger:
+  level: ERROR
+  baud_rate: 115200
+  tx_buffer_size: 512
+  hardware_uart: UART0
+  
+# ------------------------------------------------------------------
+# Serial
+# ------------------------------------------------------------------
+uart:
+  tx_pin: GPIO1
+  baud_rate: 115200
+
+# ------------------------------------------------------------------
+# Enable Home Assistant API
+# ------------------------------------------------------------------
+api:
+  encryption:
+    key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# ------------------------------------------------------------------
+# Acceso OTA
+# ------------------------------------------------------------------
+ota:
+  platform: esphome
+  password: !secret ota_password
+
+# ------------------------------------------------------------------
+# Configuración LAN8720 WT32-ETH01 para el bus RMII
+# ------------------------------------------------------------------
+ethernet:
+  type: LAN8720
+  mdc_pin: GPIO23
+  mdio_pin: GPIO18
+  clk_mode: GPIO0_IN
+  phy_addr: 1
+  power_pin: GPIO16
+  manual_ip:
+    static_ip: 192.168.x.x
+    gateway: 192.168.x.x
+    subnet: 255.255.255.0
+    dns1: 192.168.x.x
+    dns2: 8.8.8.8
+  id: ethernet_connection
+
+# ------------------------------------------------------------------
+# Habilita el servidor web para poder acceder a la interfaz del dispositivo desde un navegador web
+# ------------------------------------------------------------------
+web_server:
+  # El puerto en el que el servidor web estará escuchando
+  port: 80
+
+# ------------------------------------------------------------------
+# Configuración de un LED de estado
+# ------------------------------------------------------------------
+status_led:
+  pin:
+    number: GPIO2
+    inverted: false
+# ------------------------------------------------------------------
+# Configuarción one_wire para sensor Dallas DS18B20
+# ------------------------------------------------------------------
+one_wire:
+  - platform: gpio
+    pin: GPIO3 # Usamos GPIO RXD
+
+# ------------------------------------------------------------------
+# Configuración del bus I2C para el expansor de pines PCF8574
+# ------------------------------------------------------------------
+i2c:
+  sda: GPIO4
+  scl: GPIO5
+  scan: false
+  id: bus_i2c
+
+# ------------------------------------------------------------------
+# Expansor de pines PCF8574 para controlar salidas digitales
+# ------------------------------------------------------------------
+pcf8574:
+  - id: 'expand_gpio'
+    address: 0x20   # S-0100000-R/W
+    i2c_id: bus_i2c 
+    pcf8575: False  # GPIOs 0 al 7
+
+# ------------------------------------------------------------------
+# Configuración de los relés conectados al expansor de pines (PCF8574->ULN2803)
+# ------------------------------------------------------------------
+switch:
+  - platform: gpio
+    name: "Rele 1"
+    pin:
+      pcf8574: expand_gpio
+      number: 0
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    name: "Rele 2"
+    pin:
+      pcf8574: expand_gpio
+      number: 1
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    name: "Rele 3"
+    pin:
+      pcf8574: expand_gpio
+      number: 2
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    name: "Rele 4"
+    pin:
+      pcf8574: expand_gpio
+      number: 3
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    name: "Rele 5"
+    pin:
+      pcf8574: expand_gpio
+      number: 4
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    name: "Rele 6"
+    pin:
+      pcf8574: expand_gpio
+      number: 5
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    name: "Rele 7"
+    pin:
+      pcf8574: expand_gpio
+      number: 6
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    name: "Rele 8"
+    pin:
+      pcf8574: expand_gpio
+      number: 7
+      mode:
+        output: true
+      inverted: false  
+
+# ------------------------------------------------------------------
+# Sensores
+# ------------------------------------------------------------------
+sensor:
+  # Sensor de temperatura Dallas DS18B20
+  # address: 0x6f5c92d44672b428  # Dirección única del sensor DS18B20
+  - platform: dallas_temp
+    name: "Temperatura caldera" # Nombre del sensor
+    id: ds1820_sensor1
+    accuracy_decimals: 3
+    update_interval: 10s
+  # Sensor de tiempo de actividad del dispositivo
+  - platform: uptime
+    name: Uptime Sensor
+    id: uptime_sensor
+    update_interval: 60s
+    on_raw_value:
+      then:
+        - text_sensor.template.publish:
+            id: uptime_human
+            state: !lambda |-
+              int seconds = round(id(uptime_sensor).raw_state);
+              int days = seconds / (24 * 3600);
+              seconds = seconds % (24 * 3600);
+              int hours = seconds / 3600;
+              seconds = seconds % 3600;
+              int minutes = seconds /  60;
+              seconds = seconds % 60;
+              return (
+                (days ? String(days) + "d " : "") +
+                (hours ? String(hours) + "h " : "") +
+                (minutes ? String(minutes) + "m " : "") +
+                (String(seconds) + "s")
+              ).c_str();
+  - platform: template
+    name: "Contador Boot"
+    lambda: |-
+      static int boot_count = 0;
+      boot_count++;
+      return boot_count;
+    update_interval: never
+
+# ------------------------------------------------------------------
+# Sensores binarios para entradas digitales
+# ------------------------------------------------------------------
+binary_sensor:
+  - platform: gpio
+    name: "Fallo quemador"
+    pin: 
+      number: GPIO14
+      mode: INPUT
+      inverted: true # entrada 8
+ - platform: gpio
+    name: "Bomba 3"
+    pin: 
+      number: GPIO15
+      mode: INPUT
+      inverted: true    # entrada 7
+ - platform: gpio
+    name: "Presostato"
+    pin: 
+      number: GPIO17    # entrada 2
+      mode: INPUT
+      inverted: true
+ - platform: gpio
+    name: "Marcha quemador"
+    pin: 
+      number: GPIO32    # entrada 4
+      mode: INPUT
+      inverted: true
+ - platform: gpio
+    name: "Petición calefacción 3"
+    pin: 
+      number: GPIO33    # entrada 3
+      mode: INPUT
+      inverted: true
+ - platform: gpio
+    name: "Petición calefacción 1-2"
+    pin: 
+      number: GPIO35    # entrada 1
+      mode: INPUT
+      inverted: true
+ - platform: gpio      
+    name: "Bomba 1"
+    pin: 
+      number: GPIO39    # entrada 5
+      mode: INPUT
+      inverted: true
+ - platform: gpio      
+    name: "Bomba 2"
+    pin: 
+      number: GPIO36    # entrada 6
+      mode: INPUT
+      inverted: true
+# ------------------------------------------------------------------
+# Botón para reiniciar el ESP32
+# ------------------------------------------------------------------
+button:
+  - platform: restart
+    name: "Reiniciar ESP32"
